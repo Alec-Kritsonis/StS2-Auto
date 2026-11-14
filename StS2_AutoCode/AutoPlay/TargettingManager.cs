@@ -8,7 +8,7 @@ namespace StS2_Auto.StS2_AutoCode.AutoPlay;
 
 internal sealed class TargettingManager
 {
-    private readonly List<Targetting> _priorities =
+    internal static IReadOnlyList<Targetting> DefaultPriorities { get; } =
     [
         new SummonsTargetting(),
         new MultipleDefaultTargetting()
@@ -17,6 +17,7 @@ internal sealed class TargettingManager
     public bool TryGetTarget(
         CardPlayOption option,
         TargettingIntent intent,
+        CombatOverride combatOverride,
         out CardPlayOption? selectedOption)
     {
         IReadOnlyList<Creature> validTargets = option.ValidTargets;
@@ -26,7 +27,7 @@ internal sealed class TargettingManager
             return false;
         }
 
-        foreach (Targetting targetting in _priorities)
+        foreach (Targetting targetting in combatOverride.TargettingPriorities)
         {
             if (!targetting.Check(validTargets))
                 continue;

@@ -34,6 +34,7 @@ internal sealed class AutoPlayGameState
     public CardPile Hand { get; }
     public IReadOnlyList<CardPlayOption> PlayableCards { get; }
     public TargettingManager TargettingManager { get; }
+    public CombatOverride? ActiveOverride { get; set; }
     public int IncomingDamage { get; }
     public IReadOnlyList<Creature> LivingEnemies { get; }
 

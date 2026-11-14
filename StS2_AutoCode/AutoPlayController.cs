@@ -143,8 +143,7 @@ public sealed partial class AutoPlayController : Node
             return;
         }
 
-        if (gameState.PlayableCards.Count != 0 ||
-            gameState.Player.PlayerCombatState is not { } playerCombatState)
+        if (gameState.Player.PlayerCombatState is not { } playerCombatState)
         {
             return;
         }
@@ -152,8 +151,9 @@ public sealed partial class AutoPlayController : Node
         _endTurnRequested = true;
         PlayerCmd.EndTurn(gameState.Player, canBackOut: false);
         AutoPlayLogger.postInfo(
-            $"No playable cards remain; ending turn " +
+            $"No useful playable cards remain; ending turn " +
             $"(energy: {playerCombatState.Energy}, " +
+            $"playable: {gameState.PlayableCards.Count}, " +
             $"hand: {gameState.Hand.Cards.Count}, enemies: {gameState.LivingEnemies.Count}).");
     }
 

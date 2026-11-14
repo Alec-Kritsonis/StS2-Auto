@@ -33,6 +33,8 @@ internal sealed class DebuffSetupCircumstance : Circumstance
         return state.TargettingManager.TryGetTarget(
             selectedCard,
             TargettingIntent.ApplyDebuff,
+            state.ActiveOverride ?? throw new System.InvalidOperationException(
+                "A combat override must be selected before targetting."),
             out CardPlayOption? selectedOption)
             ? selectedOption
             : null;

@@ -4,6 +4,7 @@ using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Localization.DynamicVars;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Models.Powers;
 
 namespace StS2_Auto.StS2_AutoCode.AutoPlay.Circumstances;
 
@@ -37,7 +38,14 @@ internal sealed class CanKillCircumstance : Circumstance
         }
 
         int bestEnergyCost = int.MaxValue;
-        foreach (Creature enemy in state.LivingEnemies)
+        Creature[] nonMinions = state.LivingEnemies
+            .Where(enemy => !enemy.HasPower<MinionPower>())
+            .ToArray();
+        IReadOnlyList<Creature> enemiesToConsider = nonMinions.Length > 0
+            ? nonMinions
+            : state.LivingEnemies;
+
+        foreach (Creature enemy in enemiesToConsider)
         {
             var damagingCards = state.PlayableCards
                 .SelectMany(option => GetOptionsForEnemy(option, enemy))
