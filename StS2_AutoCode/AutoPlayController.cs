@@ -1,15 +1,12 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Cards;
-using MegaCrit.Sts2.Core.Entities.Creatures;
-using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes;
-using MegaCrit.Sts2.Core.Runs;
+using StS2_Auto.StS2_AutoCode.AutoPlay;
+using StS2_Auto.StS2_AutoCode.Logging;
 
 namespace StS2_Auto.StS2_AutoCode;
 
@@ -17,13 +14,32 @@ public sealed partial class AutoPlayController : Node
 {
     private const double RetryDelay = 0.75;
     private const double PendingCardTimeout = 5.0;
-    private static readonly Random Random = new();
+    private readonly PriorityManager _priorityManager = new();
 
     private bool _enabled;
+    private bool _playerTurnStarted;
     private double _retryTimer;
     private double _pendingCardTimer;
     private CardModel? _pendingCard;
     private CardPile? _pendingHand;
+    private CombatManager? _combatManager;
+
+    public override void _Ready()
+    {
+        _combatManager = CombatManager.Instance;
+        _combatManager.TurnStarted += OnTurnStarted;
+        _combatManager.TurnEnded += OnTurnEnded;
+    }
+
+    public override void _ExitTree()
+    {
+        if (_combatManager == null)
+            return;
+
+        _combatManager.TurnStarted -= OnTurnStarted;
+        _combatManager.TurnEnded -= OnTurnEnded;
+        _combatManager = null;
+    }
 
     public override void _Input(InputEvent @event)
     {
@@ -38,12 +54,12 @@ public sealed partial class AutoPlayController : Node
         _enabled = !_enabled;
         _retryTimer = 0;
         GetViewport().SetInputAsHandled();
-        GD.Print($"[AutoPlay] {(_enabled ? "Enabled" : "Disabled")} (F8 to toggle).");
+        AutoPlayLogger.postInfo($"{(_enabled ? "Enabled" : "Disabled")} (F8 to toggle).");
     }
 
     public override void _Process(double delta)
     {
-        if (!_enabled)
+        if (!_enabled || !_playerTurnStarted)
             return;
 
         if (_pendingCard != null)
@@ -57,7 +73,7 @@ public sealed partial class AutoPlayController : Node
             }
 
             if (ReferenceEquals(_pendingCard.Pile, _pendingHand))
-                GD.Print("[AutoPlay] Timed out waiting for the selected card to leave the hand.");
+                AutoPlayLogger.postWarn("Timed out waiting for the selected card to leave the hand.");
 
             _pendingCard = null;
             _pendingHand = null;
@@ -70,87 +86,43 @@ public sealed partial class AutoPlayController : Node
             return;
 
         _retryTimer = RetryDelay;
-        TryPlayRandomCard();
+        TryPlayByPriority();
     }
 
-    private void TryPlayRandomCard()
+    private void TryPlayByPriority()
     {
         CombatState? combatState = CombatManager.Instance.DebugOnlyGetState();
         if (combatState == null ||
-            combatState.CurrentSide != CombatSide.Player ||
-            CombatManager.Instance.IsOverOrEnding)
-        {
-            return;
-        }
-
-        RunState? runState = RunManager.Instance.DebugOnlyGetState();
-        if (runState == null || runState.Players.Count != 1)
+            !AutoPlayGameState.TryCreate(combatState, out AutoPlayGameState? gameState) ||
+            gameState == null ||
+            !_priorityManager.TryGetCard(gameState, out CardPlayOption? selectedOption) ||
+            selectedOption == null)
             return;
 
-        Player player = runState.Players[0];
-        PlayerCombatState? playerCombatState = player.PlayerCombatState;
-        if (playerCombatState == null)
+        if (!selectedOption.Card.TryManualPlay(selectedOption.Target))
             return;
 
-        CardPile hand = playerCombatState.Hand;
-        var playableCards = new List<(CardModel Card, Creature? Target)>();
-
-        foreach (CardModel card in hand.Cards)
-        {
-            if (TryChooseTarget(card, combatState, out Creature? target))
-                playableCards.Add((card, target));
-        }
-
-        if (playableCards.Count == 0)
-            return;
-
-        (CardModel selectedCard, Creature? selectedTarget) =
-            playableCards[Random.Next(playableCards.Count)];
-
-        if (!selectedCard.TryManualPlay(selectedTarget))
-            return;
-
-        _pendingCard = selectedCard;
-        _pendingHand = hand;
+        _pendingCard = selectedOption.Card;
+        _pendingHand = gameState.Hand;
         _pendingCardTimer = PendingCardTimeout;
-        GD.Print("[AutoPlay] Queued a random playable card from the hand.");
     }
 
-    private static bool TryChooseTarget(
-        CardModel card,
-        ICombatState combatState,
-        out Creature? target)
+    private void OnTurnStarted(CombatState state)
     {
-        target = null;
+        if (CombatManager.Instance.IsEnemyTurnStarted)
+            return;
 
-        if (card.TargetType == TargetType.AnyEnemy)
-        {
-            Creature[] validTargets = combatState.HittableEnemies
-                .Where(card.CanPlayTargeting)
-                .ToArray();
+        _playerTurnStarted = true;
+        AutoPlayLogger.WriteSeparator("START PLAYER TURN");
+    }
 
-            if (validTargets.Length == 0)
-                return false;
+    private void OnTurnEnded(CombatState state)
+    {
+        if (CombatManager.Instance.IsEnemyTurnStarted)
+            return;
 
-            target = validTargets[Random.Next(validTargets.Length)];
-            return true;
-        }
-
-        if (card.TargetType == TargetType.AnyAlly)
-        {
-            Creature[] validTargets = combatState.Allies
-                .Where(creature => creature.IsAlive)
-                .Where(card.CanPlayTargeting)
-                .ToArray();
-
-            if (validTargets.Length == 0)
-                return false;
-
-            target = validTargets[Random.Next(validTargets.Length)];
-            return true;
-        }
-
-        return card.CanPlayTargeting(null);
+        _playerTurnStarted = false;
+        AutoPlayLogger.WriteSeparator("END PLAYER TURN");
     }
 
     internal static void Install(NGame game)
@@ -163,7 +135,7 @@ public sealed partial class AutoPlayController : Node
             Name = nameof(AutoPlayController)
         };
         game.AddChild(controller);
-        GD.Print("[AutoPlay] Ready. Press F8 to toggle random card play.");
+        AutoPlayLogger.postInfo("Ready. Press F8 to toggle card autoplay.");
     }
 }
 

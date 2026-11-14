@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using Godot;
 using MegaCrit.Sts2.Core.Combat;
+using StS2_Auto.StS2_AutoCode.Logging;
 
 public static class CombatInspector
 {
@@ -23,7 +24,7 @@ public static class CombatInspector
 
         _initialized = true;
 
-        GD.Print("[CombatInspector] Initialized. Waiting for combat...");
+        AutoPlayLogger.postInfo("CombatInspector initialized. Waiting for combat...");
     }
 
     private static void OnCombatSetUp(CombatState state)
@@ -49,22 +50,22 @@ public static class CombatInspector
 
             if (state == null)
             {
-                GD.Print($"[CombatInspector] {reason}: no active combat state.");
+                AutoPlayLogger.postDebug($"{reason}: no active combat state.");
                 return;
             }
 
-            GD.Print($"========== [CombatInspector] {reason} ==========");
+            AutoPlayLogger.postDebug($"========== {reason} ==========");
 
             var visited = new HashSet<object>(
                 ReferenceEqualityComparer.Instance);
 
             DumpObject("CombatState", state, 0, visited);
 
-            GD.Print("========== [CombatInspector] End ==========");
+            AutoPlayLogger.postDebug("========== End ==========");
         }
         catch (Exception ex)
         {
-            GD.PrintErr($"[CombatInspector] Logging failed: {ex}");
+            AutoPlayLogger.postError($"Combat inspection failed: {ex}");
         }
     }
 
@@ -81,14 +82,14 @@ public static class CombatInspector
 
         if (IsSimple(type))
         {
-            GD.Print($"{label}: {obj}");
+            AutoPlayLogger.postDebug($"{label}: {obj}");
             return;
         }
 
         if (!type.IsValueType && !visited.Add(obj))
             return;
 
-        GD.Print($"{label} [{type.Name}]");
+        AutoPlayLogger.postDebug($"{label} [{type.Name}]");
 
         if (obj is IEnumerable items && obj is not string)
         {
@@ -98,7 +99,7 @@ public static class CombatInspector
             {
                 if (index >= 20)
                 {
-                    GD.Print($"{label}: stopped after 20 items");
+                    AutoPlayLogger.postDebug($"{label}: stopped after 20 items");
                     break;
                 }
 
@@ -134,7 +135,7 @@ public static class CombatInspector
                 {
                     if (IsInteresting(propertyName))
                     {
-                        GD.Print(
+                        AutoPlayLogger.postDebug(
                             $"{label}.{propertyName} = {value}");
                     }
                 }
@@ -149,8 +150,8 @@ public static class CombatInspector
             }
             catch (Exception ex)
             {
-                GD.Print(
-                    $"[CombatInspector] Could not read " +
+                AutoPlayLogger.postWarn(
+                    $"Could not read " +
                     $"{type.Name}.{propertyName}: {ex.GetType().Name}");
             }
         }
