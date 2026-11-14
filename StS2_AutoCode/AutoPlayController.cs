@@ -1,10 +1,13 @@
 using System;
+using System.Linq;
 using Godot;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Rooms;
 using StS2_Auto.StS2_AutoCode.AutoPlay;
 using StS2_Auto.StS2_AutoCode.Logging;
 
@@ -15,9 +18,11 @@ public sealed partial class AutoPlayController : Node
     private const double RetryDelay = 0.75;
     private const double PendingCardTimeout = 5.0;
     private readonly PriorityManager _priorityManager = new();
+    private readonly TargettingManager _targettingManager = new();
 
     private bool _enabled;
     private bool _playerTurnStarted;
+    private bool _endTurnRequested;
     private double _retryTimer;
     private double _pendingCardTimer;
     private CardModel? _pendingCard;
@@ -29,6 +34,7 @@ public sealed partial class AutoPlayController : Node
         _combatManager = CombatManager.Instance;
         _combatManager.TurnStarted += OnTurnStarted;
         _combatManager.TurnEnded += OnTurnEnded;
+        _combatManager.CombatEnded += OnCombatEnded;
     }
 
     public override void _ExitTree()
@@ -38,18 +44,28 @@ public sealed partial class AutoPlayController : Node
 
         _combatManager.TurnStarted -= OnTurnStarted;
         _combatManager.TurnEnded -= OnTurnEnded;
+        _combatManager.CombatEnded -= OnCombatEnded;
         _combatManager = null;
     }
 
     public override void _Input(InputEvent @event)
     {
         if (@event is not InputEventKey key ||
-            key.Keycode != Key.F8 ||
             !key.Pressed ||
             key.Echo)
         {
             return;
         }
+
+        if (key.Keycode == Key.F9)
+        {
+            AutoPlayLogger.CycleLogLevel();
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (key.Keycode != Key.F8)
+            return;
 
         _enabled = !_enabled;
         _retryTimer = 0;
@@ -59,7 +75,7 @@ public sealed partial class AutoPlayController : Node
 
     public override void _Process(double delta)
     {
-        if (!_enabled || !_playerTurnStarted)
+        if (!_enabled || !_playerTurnStarted || _endTurnRequested)
             return;
 
         if (_pendingCard != null)
@@ -72,12 +88,21 @@ public sealed partial class AutoPlayController : Node
                 return;
             }
 
-            if (ReferenceEquals(_pendingCard.Pile, _pendingHand))
+            bool cardLeftHand = !ReferenceEquals(_pendingCard.Pile, _pendingHand);
+            string playedCardTitle = _pendingCard.Title;
+            if (!cardLeftHand)
                 AutoPlayLogger.postWarn("Timed out waiting for the selected card to leave the hand.");
 
             _pendingCard = null;
             _pendingHand = null;
             _retryTimer = RetryDelay;
+            if (cardLeftHand)
+            {
+                LogCurrentState(
+                    $"AFTER CARD: {playedCardTitle}",
+                    CombatManager.Instance.DebugOnlyGetState(),
+                    debug: true);
+            }
             return;
         }
 
@@ -93,18 +118,43 @@ public sealed partial class AutoPlayController : Node
     {
         CombatState? combatState = CombatManager.Instance.DebugOnlyGetState();
         if (combatState == null ||
-            !AutoPlayGameState.TryCreate(combatState, out AutoPlayGameState? gameState) ||
-            gameState == null ||
-            !_priorityManager.TryGetCard(gameState, out CardPlayOption? selectedOption) ||
-            selectedOption == null)
+            !AutoPlayGameState.TryCreate(
+                combatState,
+                _targettingManager,
+                out AutoPlayGameState? gameState) ||
+            gameState == null)
             return;
 
-        if (!selectedOption.Card.TryManualPlay(selectedOption.Target))
+        if (gameState.LivingEnemies.Count == 0)
+        {
+            AutoPlayLogger.postDebug("Skipping autoplay because combat has no living enemies.");
             return;
+        }
 
-        _pendingCard = selectedOption.Card;
-        _pendingHand = gameState.Hand;
-        _pendingCardTimer = PendingCardTimeout;
+        if (_priorityManager.TryGetCard(gameState, out CardPlayOption? selectedOption) &&
+            selectedOption != null)
+        {
+            if (!selectedOption.Card.TryManualPlay(selectedOption.Target))
+                return;
+
+            _pendingCard = selectedOption.Card;
+            _pendingHand = gameState.Hand;
+            _pendingCardTimer = PendingCardTimeout;
+            return;
+        }
+
+        if (gameState.PlayableCards.Count != 0 ||
+            gameState.Player.PlayerCombatState is not { } playerCombatState)
+        {
+            return;
+        }
+
+        _endTurnRequested = true;
+        PlayerCmd.EndTurn(gameState.Player, canBackOut: false);
+        AutoPlayLogger.postInfo(
+            $"No playable cards remain; ending turn " +
+            $"(energy: {playerCombatState.Energy}, " +
+            $"hand: {gameState.Hand.Cards.Count}, enemies: {gameState.LivingEnemies.Count}).");
     }
 
     private void OnTurnStarted(CombatState state)
@@ -113,7 +163,9 @@ public sealed partial class AutoPlayController : Node
             return;
 
         _playerTurnStarted = true;
+        _endTurnRequested = false;
         AutoPlayLogger.WriteSeparator("START PLAYER TURN");
+        LogCurrentState("PLAYER TURN START", state, debug: false);
     }
 
     private void OnTurnEnded(CombatState state)
@@ -122,7 +174,73 @@ public sealed partial class AutoPlayController : Node
             return;
 
         _playerTurnStarted = false;
+        _endTurnRequested = false;
         AutoPlayLogger.WriteSeparator("END PLAYER TURN");
+    }
+
+    private void OnCombatEnded(CombatRoom room)
+    {
+        ResetCombatState();
+        AutoPlayLogger.WriteSeparator("END COMBAT");
+    }
+
+    private void ResetCombatState()
+    {
+        _playerTurnStarted = false;
+        _endTurnRequested = false;
+        _retryTimer = 0;
+        _pendingCardTimer = 0;
+        _pendingCard = null;
+        _pendingHand = null;
+    }
+
+    private void LogCurrentState(string label, CombatState? combatState, bool debug)
+    {
+        if (combatState == null ||
+            !AutoPlayGameState.TryCreate(
+                combatState,
+                _targettingManager,
+                out AutoPlayGameState? gameState) ||
+            gameState?.Player.PlayerCombatState is not { } playerCombatState)
+        {
+            LogStateMessage($"{label}: combat state unavailable.", debug);
+            return;
+        }
+
+        string hand = string.Join(", ", gameState.Hand.Cards.Select(card => card.Title));
+        string enemies = string.Join(
+            "; ",
+            gameState.LivingEnemies.Select(enemy =>
+                $"{(enemy.Monster == null ? "Unknown" : enemy.Monster.Title.ToString())} " +
+                $"HP {enemy.CurrentHp}/{enemy.MaxHp}, block {enemy.Block}"));
+
+        LogStateMessage(
+            $"{label}: player HP {gameState.Player.Creature.CurrentHp}/" +
+            $"{gameState.Player.Creature.MaxHp}, block {gameState.Player.Creature.Block}, " +
+            $"energy {playerCombatState.Energy}/{playerCombatState.MaxEnergy}, " +
+            $"incoming damage {gameState.IncomingDamage}, playable cards " +
+            $"{gameState.PlayableCards.Count}, hand [{hand}], enemies [{enemies}].",
+            debug);
+    }
+
+    private static void LogStateMessage(string message, bool debug)
+    {
+        if (debug)
+            AutoPlayLogger.postDebug(message);
+        else
+            AutoPlayLogger.postInfo(message);
+    }
+
+    internal static void OnCombatStarting()
+    {
+        AutoPlayLogger.WriteSeparator("START COMBAT");
+
+        NGame? game = NGame.Instance;
+        if (game == null || !GodotObject.IsInstanceValid(game))
+            return;
+
+        game.GetNodeOrNull<AutoPlayController>(nameof(AutoPlayController))?
+            .ResetCombatState();
     }
 
     internal static void Install(NGame game)
@@ -135,7 +253,17 @@ public sealed partial class AutoPlayController : Node
             Name = nameof(AutoPlayController)
         };
         game.AddChild(controller);
-        AutoPlayLogger.postInfo("Ready. Press F8 to toggle card autoplay.");
+        AutoPlayLogger.postInfo("Ready. Press F8 to toggle card autoplay; F9 to cycle log level.");
+    }
+}
+
+[HarmonyPatch(typeof(CombatRoom), "StartCombat")]
+internal static class CombatLifecyclePatch
+{
+    [HarmonyPrefix]
+    private static void Prefix()
+    {
+        AutoPlayController.OnCombatStarting();
     }
 }
 

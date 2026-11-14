@@ -30,31 +30,73 @@ internal sealed class CanKillCircumstance : Circumstance
         out List<CardPlayOption>? plan)
     {
         plan = null;
-        if (state.LivingEnemies.Count != 1 ||
+        if (state.LivingEnemies.Count == 0 ||
             state.Player.PlayerCombatState is not { } playerCombatState)
         {
             return false;
         }
 
-        Creature enemy = state.LivingEnemies[0];
-        var damagingCards = state.PlayableCards
-            .Select(option => (Option: option, Damage: GetDamage(option, enemy)))
-            .Where(candidate => candidate.Damage > 0)
-            .ToArray();
-
-        var selectedCards = new List<CardPlayOption>();
-        if (!TryFindLethalCombination(
-                damagingCards,
-                0,
-                playerCombatState.Energy,
-                enemy.CurrentHp + enemy.Block,
-                selectedCards))
+        int bestEnergyCost = int.MaxValue;
+        foreach (Creature enemy in state.LivingEnemies)
         {
-            return false;
+            var damagingCards = state.PlayableCards
+                .SelectMany(option => GetOptionsForEnemy(option, enemy))
+                .Select(option => (Option: option, Damage: GetDamage(option, enemy)))
+                .Where(candidate => candidate.Damage > 0)
+                .ToArray();
+
+            var selectedCards = new List<CardPlayOption>();
+            if (!TryFindLethalCombination(
+                    damagingCards,
+                    0,
+                    playerCombatState.Energy,
+                    enemy.CurrentHp + enemy.Block,
+                    selectedCards))
+            {
+                continue;
+            }
+
+            int energyCost = GetPlanEnergyCost(selectedCards, playerCombatState.Energy);
+            if (energyCost >= bestEnergyCost)
+                continue;
+
+            bestEnergyCost = energyCost;
+            plan = selectedCards;
         }
 
-        plan = selectedCards;
-        return true;
+        return plan is { Count: > 0 };
+    }
+
+    private static IEnumerable<CardPlayOption> GetOptionsForEnemy(
+        CardPlayOption option,
+        Creature enemy)
+    {
+        if (option.Card.TargetType == TargetType.AnyEnemy)
+        {
+            if (option.ValidTargets.Any(target => ReferenceEquals(target, enemy)))
+                yield return option.WithTarget(enemy);
+        }
+        else if (option.Card.TargetType == TargetType.AllEnemies)
+        {
+            yield return option;
+        }
+    }
+
+    private static int GetPlanEnergyCost(
+        IReadOnlyList<CardPlayOption> plan,
+        int energyAvailable)
+    {
+        int totalCost = 0;
+        foreach (CardPlayOption option in plan)
+        {
+            int cost = option.Card.EnergyCost.CostsX
+                ? energyAvailable
+                : option.Card.EnergyCost.GetAmountToSpend();
+            totalCost += cost;
+            energyAvailable -= cost;
+        }
+
+        return totalCost;
     }
 
     private static bool TryFindLethalCombination(

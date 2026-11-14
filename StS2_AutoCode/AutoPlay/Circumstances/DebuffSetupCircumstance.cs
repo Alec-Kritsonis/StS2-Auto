@@ -26,7 +26,16 @@ internal sealed class DebuffSetupCircumstance : Circumstance
         if (debuffCards.Length == 0)
             return null;
 
-        return debuffCards[Random.Shared.Next(debuffCards.Length)];
+        CardPlayOption selectedCard = debuffCards[Random.Shared.Next(debuffCards.Length)];
+        if (selectedCard.ValidTargets.Count == 0)
+            return selectedCard;
+
+        return state.TargettingManager.TryGetTarget(
+            selectedCard,
+            TargettingIntent.ApplyDebuff,
+            out CardPlayOption? selectedOption)
+            ? selectedOption
+            : null;
     }
 
     private static bool HasFullEnergy(AutoPlayGameState state) =>

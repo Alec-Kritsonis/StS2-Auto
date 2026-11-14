@@ -4,10 +4,17 @@ using Godot;
 
 namespace StS2_Auto.StS2_AutoCode.Logging;
 
+internal enum AutoPlayLogLevel
+{
+    Info,
+    Debug
+}
+
 internal static class AutoPlayLogger
 {
     private static readonly object Sync = new();
     private static StreamWriter? _writer;
+    private static AutoPlayLogLevel _logLevel = AutoPlayLogLevel.Info;
 
     public static string LogPath { get; } = Path.Combine(
         System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
@@ -45,11 +52,23 @@ internal static class AutoPlayLogger
 
     public static void postInfo(string message) => Write("INFO", message);
 
-    public static void postDebug(string message) => Write("DEBUG", message);
+    public static void postDebug(string message)
+    {
+        if (_logLevel == AutoPlayLogLevel.Debug)
+            Write("DEBUG", message);
+    }
 
     public static void postWarn(string message) => Write("WARN", message);
 
     public static void postError(string message) => Write("ERROR", message);
+
+    public static void CycleLogLevel()
+    {
+        _logLevel = _logLevel == AutoPlayLogLevel.Info
+            ? AutoPlayLogLevel.Debug
+            : AutoPlayLogLevel.Info;
+        postInfo($"Log level set to {_logLevel.ToString().ToUpperInvariant()} (F9 to cycle).");
+    }
 
     private static void Write(string level, string message)
     {

@@ -17,12 +17,14 @@ internal sealed class AutoPlayGameState
         CombatState combatState,
         Player player,
         CardPile hand,
-        IReadOnlyList<CardPlayOption> playableCards)
+        IReadOnlyList<CardPlayOption> playableCards,
+        TargettingManager targettingManager)
     {
         CombatState = combatState;
         Player = player;
         Hand = hand;
         PlayableCards = playableCards;
+        TargettingManager = targettingManager;
         IncomingDamage = CalculateIncomingDamage(combatState, player.Creature);
         LivingEnemies = combatState.Enemies.Where(enemy => enemy.IsAlive).ToArray();
     }
@@ -31,10 +33,14 @@ internal sealed class AutoPlayGameState
     public Player Player { get; }
     public CardPile Hand { get; }
     public IReadOnlyList<CardPlayOption> PlayableCards { get; }
+    public TargettingManager TargettingManager { get; }
     public int IncomingDamage { get; }
     public IReadOnlyList<Creature> LivingEnemies { get; }
 
-    public static bool TryCreate(CombatState combatState, out AutoPlayGameState? state)
+    public static bool TryCreate(
+        CombatState combatState,
+        TargettingManager targettingManager,
+        out AutoPlayGameState? state)
     {
         state = null;
         if (combatState.CurrentSide != CombatSide.Player ||
@@ -57,11 +63,14 @@ internal sealed class AutoPlayGameState
 
         foreach (CardModel card in hand.Cards)
         {
-            if (TryChooseTarget(card, combatState, out Creature? target))
-                playableCards.Add(new CardPlayOption(card, target));
+            if (TryCreatePlayOption(card, combatState, out CardPlayOption? option) &&
+                option != null)
+            {
+                playableCards.Add(option);
+            }
         }
 
-        state = new AutoPlayGameState(combatState, player, hand, playableCards);
+        state = new AutoPlayGameState(combatState, player, hand, playableCards, targettingManager);
         return true;
     }
 
@@ -82,12 +91,12 @@ internal sealed class AutoPlayGameState
         return totalDamage;
     }
 
-    private static bool TryChooseTarget(
+    private static bool TryCreatePlayOption(
         CardModel card,
         ICombatState combatState,
-        out Creature? target)
+        out CardPlayOption? option)
     {
-        target = null;
+        option = null;
 
         if (card.TargetType == TargetType.AnyEnemy)
         {
@@ -98,7 +107,7 @@ internal sealed class AutoPlayGameState
             if (validTargets.Length == 0)
                 return false;
 
-            target = validTargets[Random.Shared.Next(validTargets.Length)];
+            option = new CardPlayOption(card, validTargets, null);
             return true;
         }
 
@@ -112,10 +121,15 @@ internal sealed class AutoPlayGameState
             if (validTargets.Length == 0)
                 return false;
 
-            target = validTargets[Random.Shared.Next(validTargets.Length)];
+            Creature target = validTargets[Random.Shared.Next(validTargets.Length)];
+            option = new CardPlayOption(card, Array.Empty<Creature>(), target);
             return true;
         }
 
-        return card.CanPlayTargeting(null);
+        if (!card.CanPlayTargeting(null))
+            return false;
+
+        option = new CardPlayOption(card, Array.Empty<Creature>(), null);
+        return true;
     }
 }

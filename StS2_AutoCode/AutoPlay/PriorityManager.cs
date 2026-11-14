@@ -11,7 +11,7 @@ internal sealed class PriorityManager
     private readonly List<Circumstance> _priorities =
     [
         new CanKillCircumstance(),
-        new MaxValueDefendCircumstance(),
+        new EfficientDefendCircumstance(),
         new DebuffSetupCircumstance(),
         new RandomAttackDefaultCircumstance(),
         new RandomDefaultCircumstance()
@@ -29,6 +29,21 @@ internal sealed class PriorityManager
             selectedOption = circumstance.GetBestCard(state);
             if (selectedOption == null)
                 continue;
+
+            if (selectedOption.Target == null &&
+                selectedOption.ValidTargets.Count > 0)
+            {
+                if (!state.TargettingManager.TryGetTarget(
+                        selectedOption,
+                        TargettingIntent.Default,
+                        out CardPlayOption? resolvedOption) ||
+                    resolvedOption == null)
+                {
+                    continue;
+                }
+
+                selectedOption = resolvedOption;
+            }
 
             AutoPlayLogger.postInfo(
                 $"{circumstance.Name} selected card '{selectedOption.Card.Title}'.");
